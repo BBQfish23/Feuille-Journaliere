@@ -132,29 +132,45 @@ if uploaded_file is not None:
         if not found.empty:
             start_m = curr_row
             items = found.sort_values('Start Time') if 'Start Time' in found.columns else found
+            total_items = len(items) # On compte combien de superviseurs il y a dans ce département
+            
             for i, (_, r) in enumerate(items.iterrows()):
+                # --- LOGIQUE DYNAMIQUE DES BORDURES ---
+                is_first = (i == 0)
+                is_last = (i == total_items - 1)
                 
-                # Appliquer la bordure grasse à la colonne du département
+                # 1. Bordures pour la colonne Département (Col 1)
                 cell_label = ws.cell(row=curr_row, column=1, value=label.upper())
                 cell_label.font = font_superviseur_dept
-                cell_label.border = border_thick_all
+                cell_label.border = Border(
+                    left=thick, 
+                    right=thick, # Ligne épaisse entre le nom du département et les employés
+                    top=thick if is_first else thin, 
+                    bottom=thick if is_last else thin
+                )
                 
-                # Fusionner les colonnes pour le nom/heure
+                # 2. Préparation et fusion pour les employés (Col 2 à 5)
                 ws.merge_cells(start_row=curr_row, start_column=2, end_row=curr_row, end_column=5)
                 h_end = str(r['End Time']).strip()
                 h_info = f" ({r['Start Time']} - {h_end})" if h_end and h_end != 'nan' and h_end != '' else f" ({r['Start Time']})"
                 txt = f"{extraire_prenom(r['Employee'])}{h_info}"
                 
-                # Appliquer la bordure grasse à toutes les cellules fusionnées
+                # 3. Application des bordures sur chaque cellule fusionnée
                 for c in range(2, 6):
                     cell = ws.cell(row=curr_row, column=c)
-                    cell.border = border_thick_all
                     cell.font = font_normal
                     if c == 2: cell.value = txt
+                    
+                    cell.border = Border(
+                        left=thick if c == 2 else thin, # S'assure que le bord gauche (collé au département) est épais
+                        right=thick if c == 5 else thin, # Le bord extrême droit du tableau
+                        top=thick if is_first else thin, # Épais seulement si c'est le 1er employé du dept
+                        bottom=thick if is_last else thin # Épais seulement si c'est le dernier employé du dept
+                    )
                 curr_row += 1
                 
-            # Fusion verticale des départements
-            if curr_row - start_m > 1:
+            # 4. Fusion verticale de la colonne 1 APRES avoir appliqué les bordures
+            if total_items > 1:
                 ws.merge_cells(start_row=start_m, start_column=1, end_row=curr_row-1, end_column=1)
 
     # 3. SECTIONS EMPLOYÉS
