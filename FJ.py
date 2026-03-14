@@ -108,6 +108,8 @@ if uploaded_file is not None:
     ws.cell(row=curr_row, column=1, value="SUPERVISEURS ET ADJOINTS").fill = light_gray_fill
     ws.cell(row=curr_row, column=1).font = font_titre_secondaire
     ws.cell(row=curr_row, column=1).alignment = center_align
+    # S'assurer que le titre a aussi des bordures grasses
+    for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thick_all
     curr_row += 1
 
     ordres_sup = [
@@ -130,20 +132,27 @@ if uploaded_file is not None:
             start_m = curr_row
             items = found.sort_values('Start Time') if 'Start Time' in found.columns else found
             for i, (_, r) in enumerate(items.iterrows()):
-                current_border = border_thick_bottom if i == len(items) - 1 else border_thin
+                
+                # Appliquer la bordure grasse à la colonne du département
                 cell_label = ws.cell(row=curr_row, column=1, value=label.upper())
                 cell_label.font = font_superviseur_dept
-                cell_label.border = current_border
+                cell_label.border = border_thick_all
+                
+                # Fusionner les colonnes pour le nom/heure
                 ws.merge_cells(start_row=curr_row, start_column=2, end_row=curr_row, end_column=5)
                 h_end = str(r['End Time']).strip()
                 h_info = f" ({r['Start Time']} - {h_end})" if h_end and h_end != 'nan' and h_end != '' else f" ({r['Start Time']})"
                 txt = f"{extraire_prenom(r['Employee'])}{h_info}"
+                
+                # Appliquer la bordure grasse à toutes les cellules fusionnées
                 for c in range(2, 6):
                     cell = ws.cell(row=curr_row, column=c)
-                    cell.border = current_border
+                    cell.border = border_thick_all
                     cell.font = font_normal
                     if c == 2: cell.value = txt
                 curr_row += 1
+                
+            # Fusion verticale des départements
             if curr_row - start_m > 1:
                 ws.merge_cells(start_row=start_m, start_column=1, end_row=curr_row-1, end_column=1)
 
