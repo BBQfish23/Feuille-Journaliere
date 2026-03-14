@@ -62,7 +62,7 @@ theme_actuel = themes_config[theme_choisi]
 
 # --- FONCTIONS UTILITAIRES ---
 def extraire_prenom(nom_complet):
-    if pd.isna(nom_complet): return "N/A"
+    if pd.isna(nom_complet) or nom_complet == '': return "N/A"
     return str(nom_complet).split(' ')[0]
 
 def str_to_minutes(t_str):
@@ -76,24 +76,25 @@ def str_to_minutes(t_str):
 uploaded_file = st.file_uploader("Choisir le fichier CSV", type="csv")
 
 if uploaded_file is not None:
-    # 1. BLINDAGE DU CHARGEMENT DES DONNÉES
+    # 1. NETTOYAGE BLINDÉ DU FICHIER
     df = pd.read_csv(uploaded_file)
-    df.columns = df.columns.str.strip() # Enlève les espaces invisibles
+    df.columns = df.columns.str.strip()
     
-    # Remplissage sécuritaire des valeurs vides (NaN)
-    for col in ['Start Time', 'End Time', 'Note', 'Area', 'Employee']:
-        if col in df.columns:
-            df[col] = df[col].fillna('')
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].fillna('').astype(str).str.strip()
+        else:
+            df[col] = df[col].fillna(0)
 
     try:
         date_brute = df['Start Date'].iloc[0]
-        date_obj = datetime.strptime(str(date_brute).strip(), '%Y-%m-%d')
+        date_obj = datetime.strptime(str(date_brute), '%Y-%m-%d')
         jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
         mois_fr = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
         date_formatee = f"{jours_fr[date_obj.weekday()]} {date_obj.day} {mois_fr[date_obj.month - 1]} {date_obj.year}"
         st.success(f"Fichier détecté pour le : {date_formatee}")
     except Exception as e:
-        st.error("Erreur avec la date. Vérifiez le format du fichier CSV.")
+        st.error("Erreur avec la lecture de la date. Le fichier est-il valide ?")
         st.stop()
 
     # --- CRÉATION DU EXCEL ---
@@ -120,49 +121,6 @@ if uploaded_file is not None:
     center_no_wrap = Alignment(horizontal="center", vertical="center", wrap_text=False)
     border_thick_all = Border(left=thick, right=thick, top=thick, bottom=thick)
 
-    # --- LOGIQUE DE PAUSES GLOBALES ---
-    pauses_globales = set() 
-
-    def calculer_pause_unique(is_qbe, heure_debut_str, duree_heures):
-        try:
-            val = float(duree_heures)
-            if val < 5.5: return "15 min"
-            fmt = "%H:%M"
-            
-            # Base 3 heures après l'arrivée
-            base = datetime.strptime(str(heure_debut_str).strip(), fmt) + timedelta(hours=3)
-            # Pas de pause avant 11h30
-            earliest = datetime.strptime("11:30", fmt)
-            current_pause = max(base, earliest)
-            
-            # Arrondi à 30 min supérieures
-            minute = current_pause.minute
-            if 0 < minute <= 30:
-                current_pause = current_pause.replace(minute=30)
-            elif minute > 30:
-                current_pause = current_pause + timedelta(hours=1)
-                current_pause = current_pause.replace(minute=0)
-                
-            interdits_globaux = ["18:00", "18:30"]
-            interdits_qbe = ["10:00", "11:30", "13:00", "14:30", "16:00", "17:30", "19:00", "20:30"]
-            
-            while True:
-                str_pause = current_pause.strftime(fmt)
-                if str_pause in interdits_globaux:
-                    pass 
-                elif is_qbe and str_pause in interdits_qbe:
-                    pass 
-                elif str_pause in pauses_globales:
-                    pass 
-                else:
-                    pauses_globales.add(str_pause)
-                    return str_pause
-                
-                current_pause += timedelta(minutes=30)
-                if current_pause.hour < 6: return "-" # Sécurité anti-boucle infinie
-        except: 
-            return "-"
-
     # 1. Titre Principal
     ws.merge_cells('A1:E1')
     ws.row_dimensions[1].height = 45
@@ -173,7 +131,8 @@ if uploaded_file is not None:
         
     ws['A1'] = titre_texte
     ws['A1'].fill = dark_gray_fill
-    ws['A1'].font = Font(name=theme_actuel["font"], color="FFFFFF", bold=True, size=18)
+    police_titre_theme = Font(name=theme_actuel["font"], color="FFFFFF", bold=True, size=18)
+    ws['A1'].font = police_titre_theme
     ws['A1'].alignment = center_align
     for c in range(1, 6): ws.cell(row=1, column=c).border = border_thick_all
 
@@ -222,8 +181,8 @@ if uploaded_file is not None:
                 )
                 
                 ws.merge_cells(start_row=curr_row, start_column=2, end_row=curr_row, end_column=5)
-                h_end = str(r['End Time']).strip()
-                h_info = f" ({r['Start Time']} - {h_end})" if h_end and h_end != 'nan' and h_end != '' else f" ({r['Start Time']})"
+                h_end = str(r['End Time'])
+                h_info = f" ({r['Start Time']} - {h_end})" if h_end and h_end != '0' else f" ({r['Start Time']})"
                 txt = f"{extraire_prenom(r['Employee'])}{h_info}"
                 
                 for c in range(2, 6):
@@ -240,30 +199,91 @@ if uploaded_file is not None:
             if total_items > 1:
                 ws.merge_cells(start_row=start_m, start_column=1, end_row=curr_row-1, end_column=1)
 
-    # --- PRÉPARATION GLOBALE DES CAISSES ---
-    rm = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False, na=False) & (df['Start Time'].astype(str) < '12:00')].sort_values('Start Time')
+    # --- PRÉPARATION GLOBALE DES CAISSES ET DES PAUSES ---
+    rm = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False, na=False) & (df['Start Time'] < '12:00')].sort_values('Start Time')
     qbe = df[df['Area'].str.contains('QUALITÉ ET BIEN ÊTRE', case=False, na=False)].sort_values('Start Time')
-    rs = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False, na=False) & (df['Start Time'].astype(str) >= '12:00')].sort_values('Start Time')
+    rs = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False, na=False) & (df['Start Time'] >= '12:00')].sort_values('Start Time')
     
     lg_data = df[df['Area'].str.contains('Lounge', case=False, na=False)].sort_values('Start Time')
     lg_list = list(lg_data.iterrows())
     total_lg = len(lg_list)
 
+    # 1. Calcul des Caisses
     candidats_caisses = []
-    
     for _, r in pd.concat([rm, rs]).iterrows():
-        candidats_caisses.append((r['Employee'], str(r['Start Time'])))
+        candidats_caisses.append((r['Employee'], str(r['Start Time']).strip()))
         
     for _, r in lg_list:
         note_str = str(r['Note']).lower()
         if 'accueil' not in note_str and 'acceuil' not in note_str:
-            candidats_caisses.append((r['Employee'], str(r['Start Time'])))
+            candidats_caisses.append((r['Employee'], str(r['Start Time']).strip()))
 
     candidats_caisses.sort(key=lambda x: str_to_minutes(x[1]))
 
     map_caisses = {}
     for idx, candidat in enumerate(candidats_caisses):
         map_caisses[candidat] = idx + 1
+
+    # 2. Calcul des Pauses (Cerveau Global)
+    candidats_pauses = []
+    # Ajouter Réception et QBE
+    for _, r in pd.concat([rm, rs, qbe]).iterrows():
+        is_qbe = 'QUALITÉ ET BIEN ÊTRE' in str(r['Area']).upper()
+        candidats_pauses.append((r['Employee'], str(r['Start Time']).strip(), r['Total Time'], is_qbe))
+    # Ajouter Lounge
+    for _, r in lg_list:
+        candidats_pauses.append((r['Employee'], str(r['Start Time']).strip(), r['Total Time'], False))
+
+    # Trier tout le monde strictement par heure d'arrivée
+    candidats_pauses.sort(key=lambda x: str_to_minutes(x[1]))
+
+    map_pauses = {}
+    pauses_globales = set()
+    interdits_globaux = ["18:00", "18:30"]
+    interdits_qbe = ["10:00", "11:30", "13:00", "14:30", "16:00", "17:30", "19:00", "20:30"]
+
+    for emp, h_start, total_t, is_qbe in candidats_pauses:
+        try:
+            val = float(total_t)
+            if val < 5.5: 
+                map_pauses[(emp, h_start)] = "15 min"
+                continue
+            
+            if not h_start or ":" not in h_start:
+                map_pauses[(emp, h_start)] = "-"
+                continue
+                
+            fmt = "%H:%M"
+            base = datetime.strptime(h_start, fmt) + timedelta(hours=3)
+            earliest = datetime.strptime("11:30", fmt)
+            current_pause = max(base, earliest)
+            
+            minute = current_pause.minute
+            if 0 < minute <= 30:
+                current_pause = current_pause.replace(minute=30)
+            elif minute > 30:
+                current_pause = current_pause + timedelta(hours=1)
+                current_pause = current_pause.replace(minute=0)
+                
+            while True:
+                str_pause = current_pause.strftime(fmt)
+                if str_pause in interdits_globaux:
+                    pass 
+                elif is_qbe and str_pause in interdits_qbe:
+                    pass 
+                elif str_pause in pauses_globales:
+                    pass 
+                else:
+                    pauses_globales.add(str_pause)
+                    map_pauses[(emp, h_start)] = str_pause
+                    break
+                
+                current_pause += timedelta(minutes=30)
+                if current_pause.hour < 6: 
+                    map_pauses[(emp, h_start)] = "-"
+                    break
+        except:
+            map_pauses[(emp, h_start)] = "-"
 
     # 3. SECTIONS EMPLOYÉS
     sections_a_afficher = ["RÉCEPTION"]
@@ -286,9 +306,11 @@ if uploaded_file is not None:
         curr_row += 1
 
         if section == "RÉCEPTION":
-            # Pool de tâches agrandi (* 50) 
-            pool_taches = ["Nettoyage boutique"] + ["Objet perdus", "Aide entre dept."] * 50
-            random.shuffle(pool_taches) 
+            # --- LOGIQUE STRICTE DES TÂCHES SANS RÉPÉTITION ---
+            taches_am = ["Nettoyage boutique", "Objet perdus", "Aide entre dept."]
+            taches_pm = ["Objet perdus", "Aide entre dept."]
+            random.shuffle(taches_am)
+            random.shuffle(taches_pm)
             
             ordre_postes = ["Poste 4", "Poste 1", "Poste 3", "Poste 2", "Poste 5"]
             fin_postes = {p: "00:00" for p in ordre_postes} 
@@ -298,10 +320,11 @@ if uploaded_file is not None:
                     ws.cell(row=curr_row, column=1, value=extraire_prenom(r['Employee']))
                     
                     h_end = str(r['End Time']).strip()
-                    h_end = h_end if h_end != 'nan' and h_end != '' else ""
+                    h_end = h_end if h_end != '0' and h_end != '' else ""
+                    h_start = str(r['Start Time']).strip()
                     
                     if not is_qbe:
-                        start_min = str_to_minutes(r['Start Time'])
+                        start_min = str_to_minutes(h_start)
                         postes_libres = [p for p in ordre_postes if str_to_minutes(fin_postes[p]) <= start_min]
                         
                         if postes_libres:
@@ -310,25 +333,35 @@ if uploaded_file is not None:
                             poste_attribue = min(ordre_postes, key=lambda p: (str_to_minutes(fin_postes[p]), ordre_postes.index(p)))
                         
                         fin_postes[poste_attribue] = h_end if h_end else "23:59"
-                        quart_txt = f"{str(r['Start Time']).strip()}-{h_end} / {poste_attribue}"
+                        quart_txt = f"{h_start}-{h_end} / {poste_attribue}"
                         
+                        # Assignation stricte de la tâche
+                        is_am = start_min < 720 # 12:00
                         if poste_attribue == "Poste 1":
                             tache_finale = "Bye Bye Clés"
                         else:
-                            tache_finale = pool_taches.pop(0)
+                            if is_am:
+                                tache_finale = taches_am.pop(0) if len(taches_am) > 0 else ""
+                            else:
+                                tache_finale = taches_pm.pop(0) if len(taches_pm) > 0 else ""
                     else:
-                        quart_txt = f"{str(r['Start Time']).strip()}-{h_end}"
+                        quart_txt = f"{h_start}-{h_end}"
                         tache_finale = "QBE"
                         
                     ws.cell(row=curr_row, column=2, value=quart_txt).font = font_normal_bold
                     
+                    # Récupération de la caisse
                     if is_qbe:
                         c_val = "VAM" if i == 0 else "VPM"
                     else:
-                        c_val = map_caisses.get((r['Employee'], str(r['Start Time'])), "")
+                        c_val = map_caisses.get((r['Employee'], h_start), "")
                         
                     ws.cell(row=curr_row, column=3, value=c_val)
-                    ws.cell(row=curr_row, column=4, value=calculer_pause_unique(is_qbe, str(r['Start Time']), r['Total Time']))
+                    
+                    # Récupération de la pause globale
+                    pause_val = map_pauses.get((r['Employee'], h_start), "-")
+                    ws.cell(row=curr_row, column=4, value=pause_val)
+                    
                     ws.cell(row=curr_row, column=5, value=tache_finale)
                     
                     for c in range(1, 6):
@@ -346,8 +379,11 @@ if uploaded_file is not None:
         elif section == "LOUNGE":
             for i, (_, r) in enumerate(lg_list):
                 ws.cell(row=curr_row, column=1, value=extraire_prenom(r['Employee']))
-                h_end_lg = str(r['End Time']).strip() if str(r['End Time']).strip() != 'nan' else ""
-                ws.cell(row=curr_row, column=2, value=f"{str(r['Start Time']).strip()}-{h_end_lg}").font = font_normal_bold
+                h_end_lg = str(r['End Time']).strip()
+                h_end_lg = h_end_lg if h_end_lg != '0' and h_end_lg != '' else ""
+                h_start_lg = str(r['Start Time']).strip()
+                
+                ws.cell(row=curr_row, column=2, value=f"{h_start_lg}-{h_end_lg}").font = font_normal_bold
                 
                 note_str = str(r['Note']).lower()
                 is_accueil = 'accueil' in note_str or 'acceuil' in note_str
@@ -367,9 +403,11 @@ if uploaded_file is not None:
                 if is_accueil: 
                     cell_c.fill = black_fill
                 else: 
-                    cell_c.value = map_caisses.get((r['Employee'], str(r['Start Time'])), "")
+                    cell_c.value = map_caisses.get((r['Employee'], h_start_lg), "")
                     
-                ws.cell(row=curr_row, column=4, value=calculer_pause_unique(False, str(r['Start Time']), r['Total Time']))
+                # Récupération de la pause globale
+                pause_val_lg = map_pauses.get((r['Employee'], h_start_lg), "-")
+                ws.cell(row=curr_row, column=4, value=pause_val_lg)
                 
                 for c in range(1, 6): 
                     ws.cell(row=curr_row, column=c).border = border_thin
@@ -381,7 +419,6 @@ if uploaded_file is not None:
 
     # 4. SECTION FINALE
     cercles_18_colles = "○" * 18
-    
     police_fin_theme = Font(name=theme_actuel["font"], color="000000", bold=True, size=16)
     
     sections_finales = [
