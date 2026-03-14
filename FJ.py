@@ -100,6 +100,8 @@ if uploaded_file is not None:
     ws['A1'].fill = dark_gray_fill
     ws['A1'].font = font_titre_principal
     ws['A1'].alignment = center_align
+    # AJOUT : Bordure épaisse sur toutes les cellules de la ligne 1
+    for c in range(1, 6): ws.cell(row=1, column=c).border = border_thick_all
 
     curr_row = 2
 
@@ -184,6 +186,8 @@ if uploaded_file is not None:
         ws.merge_cells(start_row=curr_row, start_column=1, end_row=curr_row, end_column=5)
         ws.cell(row=curr_row, column=1, value=section).fill = light_gray_fill
         ws.cell(row=curr_row, column=1).font = font_titre_secondaire
+        # AJOUT : Bordure épaisse pour ce titre
+        for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thick_all
         curr_row += 1
         headers = {1: "NOM", 2: "QUART / POSTE", 3: "Caisse", 4: "Lunch", 5: "TÂCHE / RESP."}
         for c in range(1, 6):
@@ -283,6 +287,8 @@ if uploaded_file is not None:
         ws.merge_cells(start_row=curr_row, start_column=1, end_row=curr_row, end_column=5)
         cell_t = ws.cell(row=curr_row, column=1, value=titre)
         cell_t.fill = light_gray_fill; cell_t.font = font_titre_secondaire; ws.row_dimensions[curr_row].height = 30
+        # AJOUT : Bordure épaisse pour ce titre
+        for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thick_all
         curr_row += 1
         if contenu:
             ws.merge_cells(start_row=curr_row, start_column=1, end_row=curr_row, end_column=5)
