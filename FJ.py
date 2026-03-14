@@ -65,12 +65,13 @@ def extraire_prenom(nom_complet):
     if pd.isna(nom_complet): return "N/A"
     return str(nom_complet).split(' ')[0]
 
-def attribuer_taches_recep(nb_staff):
-    taches = ["Bye Bye Clés"]
-    pool = ["Objet perdus", "Aide entre dept.", "Nettoyage boutique"]
-    random.shuffle(pool)
-    while len(taches) < nb_staff: taches.extend(pool)
-    return taches[:nb_staff]
+def str_to_minutes(t_str):
+    # Convertit 'HH:MM' en minutes pour faciliter les tris globaux
+    try:
+        h, m = map(int, str(t_str).split(':'))
+        return h * 60 + m
+    except:
+        return 1440 # Fin de journée par défaut si l'heure est manquante
 
 # --- INTERFACE DE CHARGEMENT ---
 uploaded_file = st.file_uploader("Choisir le fichier CSV", type="csv")
@@ -114,26 +115,60 @@ if uploaded_file is not None:
     center_no_wrap = Alignment(horizontal="center", vertical="center", wrap_text=False)
     border_thick_all = Border(left=thick, right=thick, top=thick, bottom=thick)
 
-    pauses_attribuees = {} 
+    # --- NOUVELLE LOGIQUE DE PAUSES (MÉMOIRE GLOBALE) ---
+    pauses_globales = set() 
 
-    def calculer_pause_unique(dept, heure_debut_str, duree_heures):
+    def calculer_pause_unique(is_qbe, heure_debut_str, duree_heures):
         try:
             val = float(duree_heures)
             if val < 5.5: return "15 min"
             fmt = "%H:%M"
-            base_pause = datetime.strptime(heure_debut_str, fmt) + timedelta(hours=4)
-            if dept not in pauses_attribuees: pauses_attribuees[dept] = []
-            while any(abs((base_pause - p).total_seconds()) < 1800 for p in pauses_attribuees[dept]):
-                base_pause += timedelta(minutes=30) 
-            pauses_attribuees[dept].append(base_pause)
-            return base_pause.strftime(fmt)
-        except: return "-"
+            
+            # 1. Base : minimum 3 heures après l'arrivée
+            base = datetime.strptime(heure_debut_str, fmt) + timedelta(hours=3)
+            
+            # 2. Heure la plus tôt possible = 11:30
+            earliest = datetime.strptime("11:30", fmt)
+            current_pause = max(base, earliest)
+            
+            # 3. Arrondir à la tranche de 30 min supérieure (ex: 11:45 -> 12:00)
+            minute = current_pause.minute
+            if 0 < minute <= 30:
+                current_pause = current_pause.replace(minute=30)
+            elif minute > 30:
+                current_pause = current_pause + timedelta(hours=1)
+                current_pause = current_pause.replace(minute=0)
+                
+            interdits_globaux = ["18:00", "18:30"]
+            interdits_qbe = ["10:00", "11:30", "13:00", "14:30", "16:00", "17:30", "19:00", "20:30"]
+            
+            # 4. Trouver le premier créneau libre qui respecte toutes les règles
+            while True:
+                str_pause = current_pause.strftime(fmt)
+                
+                if str_pause in interdits_globaux:
+                    pass # Heure interdite pour tout le monde
+                elif is_qbe and str_pause in interdits_qbe:
+                    pass # Heure interdite spécifiquement pour le QBE
+                elif str_pause in pauses_globales:
+                    pass # Quelqu'un d'autre est déjà en pause à cette heure
+                else:
+                    pauses_globales.add(str_pause) # On réserve cette heure
+                    return str_pause
+                
+                # Si l'heure ne fonctionne pas, on essaie 30 min plus tard
+                current_pause += timedelta(minutes=30)
+                
+                # Sécurité (si on dépasse minuit)
+                if current_pause.hour < 6: 
+                    return "-"
+        except: 
+            return "-"
 
     # 1. Titre Principal
     ws.merge_cells('A1:E1')
     ws.row_dimensions[1].height = 45
     
-    # Intégration des émojis du thème
     titre_texte = f"Département Réception | {date_formatee}"
     if theme_actuel["emoji"]:
         titre_texte = f"{theme_actuel['emoji']} {titre_texte} {theme_actuel['emoji']}"
@@ -141,12 +176,10 @@ if uploaded_file is not None:
     ws['A1'] = titre_texte
     ws['A1'].fill = dark_gray_fill
     
-    # Création d'une police dynamique pour le titre principal
     police_titre_theme = Font(name=theme_actuel["font"], color="FFFFFF", bold=True, size=18)
     ws['A1'].font = police_titre_theme
     
     ws['A1'].alignment = center_align
-    # AJOUT : Bordure épaisse sur toutes les cellules de la ligne 1
     for c in range(1, 6): ws.cell(row=1, column=c).border = border_thick_all
 
     curr_row = 2
@@ -157,7 +190,6 @@ if uploaded_file is not None:
     ws.cell(row=curr_row, column=1, value="SUPERVISEURS ET ADJOINTS").fill = light_gray_fill
     ws.cell(row=curr_row, column=1).font = font_titre_secondaire
     ws.cell(row=curr_row, column=1).alignment = center_align
-    # S'assurer que le titre a aussi des bordures grasses
     for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thick_all
     curr_row += 1
 
@@ -180,50 +212,64 @@ if uploaded_file is not None:
         if not found.empty:
             start_m = curr_row
             items = found.sort_values('Start Time') if 'Start Time' in found.columns else found
-            total_items = len(items) # On compte combien de superviseurs il y a dans ce département
+            total_items = len(items) 
             
             for i, (_, r) in enumerate(items.iterrows()):
-                # --- LOGIQUE DYNAMIQUE DES BORDURES ---
                 is_first = (i == 0)
                 is_last = (i == total_items - 1)
                 
-                # 1. Bordures pour la colonne Département (Col 1)
                 cell_label = ws.cell(row=curr_row, column=1, value=label.upper())
                 cell_label.font = font_superviseur_dept
                 cell_label.border = Border(
-                    left=thick, 
-                    right=thick, # Ligne épaisse entre le nom du département et les employés
-                    top=thick if is_first else thin, 
-                    bottom=thick if is_last else thin
+                    left=thick, right=thick, 
+                    top=thick if is_first else thin, bottom=thick if is_last else thin
                 )
                 
-                # 2. Préparation et fusion pour les employés (Col 2 à 5)
                 ws.merge_cells(start_row=curr_row, start_column=2, end_row=curr_row, end_column=5)
                 h_end = str(r['End Time']).strip()
                 h_info = f" ({r['Start Time']} - {h_end})" if h_end and h_end != 'nan' and h_end != '' else f" ({r['Start Time']})"
                 txt = f"{extraire_prenom(r['Employee'])}{h_info}"
                 
-                # 3. Application des bordures sur chaque cellule fusionnée
                 for c in range(2, 6):
                     cell = ws.cell(row=curr_row, column=c)
                     cell.font = font_normal
                     if c == 2: cell.value = txt
                     
                     cell.border = Border(
-                        left=thick if c == 2 else thin, # S'assure que le bord gauche (collé au département) est épais
-                        right=thick if c == 5 else thin, # Le bord extrême droit du tableau
-                        top=thick if is_first else thin, # Épais seulement si c'est le 1er employé du dept
-                        bottom=thick if is_last else thin # Épais seulement si c'est le dernier employé du dept
+                        left=thick if c == 2 else thin, right=thick if c == 5 else thin, 
+                        top=thick if is_first else thin, bottom=thick if is_last else thin
                     )
                 curr_row += 1
                 
-            # 4. Fusion verticale de la colonne 1 APRES avoir appliqué les bordures
             if total_items > 1:
                 ws.merge_cells(start_row=start_m, start_column=1, end_row=curr_row-1, end_column=1)
 
-    # 3. SECTIONS EMPLOYÉS
-    caisse_num = 1
+    # --- PRÉPARATION GLOBALE DES CAISSES ---
+    rm = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] < '12:00')].sort_values('Start Time')
+    qbe = df[df['Area'].str.contains('QUALITÉ ET BIEN ÊTRE', case=False)].sort_values('Start Time')
+    rs = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] >= '12:00')].sort_values('Start Time')
+    
     lg_data = df[df['Area'].str.contains('Lounge', case=False)].sort_values('Start Time')
+    lg_list = list(lg_data.iterrows())
+    total_lg = len(lg_list)
+
+    candidats_caisses = []
+    
+    for _, r in pd.concat([rm, rs]).iterrows():
+        candidats_caisses.append((r['Employee'], str(r['Start Time'])))
+        
+    for _, r in lg_list:
+        note_str = str(r['Note']).lower()
+        if 'accueil' not in note_str and 'acceuil' not in note_str:
+            candidats_caisses.append((r['Employee'], str(r['Start Time'])))
+
+    candidats_caisses.sort(key=lambda x: str_to_minutes(x[1]))
+
+    map_caisses = {}
+    for idx, candidat in enumerate(candidats_caisses):
+        map_caisses[candidat] = idx + 1
+
+    # 3. SECTIONS EMPLOYÉS
     sections_a_afficher = ["RÉCEPTION"]
     if not lg_data.empty: sections_a_afficher.append("LOUNGE")
 
@@ -232,9 +278,9 @@ if uploaded_file is not None:
         ws.merge_cells(start_row=curr_row, start_column=1, end_row=curr_row, end_column=5)
         ws.cell(row=curr_row, column=1, value=section).fill = light_gray_fill
         ws.cell(row=curr_row, column=1).font = font_titre_secondaire
-        # AJOUT : Bordure épaisse pour ce titre
         for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thick_all
         curr_row += 1
+        
         headers = {1: "NOM", 2: "QUART / POSTE", 3: "Caisse", 4: "Lunch", 5: "TÂCHE / RESP."}
         for c in range(1, 6):
             cell = ws.cell(row=curr_row, column=c)
@@ -244,24 +290,13 @@ if uploaded_file is not None:
         curr_row += 1
 
         if section == "RÉCEPTION":
-            rm = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] < '12:00')].sort_values('Start Time')
-            qbe = df[df['Area'].str.contains('QUALITÉ ET BIEN ÊTRE', case=False)].sort_values('Start Time')
-            rs = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] >= '12:00')].sort_values('Start Time')
+            pool_taches = ["Nettoyage boutique"] + ["Objet perdus", "Aide entre dept."] * 15
+            random.shuffle(pool_taches) 
             
-            # --- NOUVELLE LOGIQUE DE POSTES INTELLIGENTE ---
             ordre_postes = ["Poste 4", "Poste 1", "Poste 3", "Poste 2", "Poste 5"]
-            fin_postes = {p: "00:00" for p in ordre_postes} # Mémoire des heures de fin par poste
-            
-            def str_to_minutes(t_str):
-                # Convertit 'HH:MM' en minutes pour faciliter les comparaisons
-                try:
-                    h, m = map(int, str(t_str).split(':'))
-                    return h * 60 + m
-                except:
-                    return 1440 # Fin de journée par défaut si l'heure est manquante
+            fin_postes = {p: "00:00" for p in ordre_postes} 
 
             for group, is_qbe in [(rm, False), (qbe, True), (rs, False)]:
-                t_p = attribuer_taches_recep(len(group))
                 for i, (_, r) in enumerate(group.iterrows()):
                     ws.cell(row=curr_row, column=1, value=extraire_prenom(r['Employee']))
                     
@@ -270,35 +305,36 @@ if uploaded_file is not None:
                     
                     if not is_qbe:
                         start_min = str_to_minutes(r['Start Time'])
-                        
-                        # 1. Trouver les postes libres à l'heure d'arrivée
                         postes_libres = [p for p in ordre_postes if str_to_minutes(fin_postes[p]) <= start_min]
                         
                         if postes_libres:
-                            # Prendre le premier poste libre selon l'ordre strict 4-1-3-2-5
                             poste_attribue = postes_libres[0]
                         else:
-                            # 2. Aucun poste libre : trouver celui qui se libère le plus tôt
-                            # En cas d'égalité d'heure, l'ordre de priorité (index) départage
                             poste_attribue = min(ordre_postes, key=lambda p: (str_to_minutes(fin_postes[p]), ordre_postes.index(p)))
                         
-                        # Mettre à jour l'heure à laquelle ce poste sera de nouveau libre
                         fin_postes[poste_attribue] = h_end if h_end else "23:59"
                         quart_txt = f"{r['Start Time']}-{h_end} / {poste_attribue}"
+                        
+                        if poste_attribue == "Poste 1":
+                            tache_finale = "Bye Bye Clés"
+                        else:
+                            tache_finale = pool_taches.pop(0)
                     else:
-                        # Les QBE gardent leur format d'origine sans poste
                         quart_txt = f"{r['Start Time']}-{h_end}"
+                        tache_finale = "QBE"
                         
                     ws.cell(row=curr_row, column=2, value=quart_txt).font = font_normal_bold
                     
-                    c_val = ("VAM" if i == 0 else "VPM") if is_qbe else caisse_num
+                    if is_qbe:
+                        c_val = "VAM" if i == 0 else "VPM"
+                    else:
+                        c_val = map_caisses.get((r['Employee'], str(r['Start Time'])), "")
+                        
                     ws.cell(row=curr_row, column=3, value=c_val)
-                    if not is_qbe: caisse_num += 1
+                    # Utilisation de la nouvelle fonction avec le booléen is_qbe
+                    ws.cell(row=curr_row, column=4, value=calculer_pause_unique(is_qbe, r['Start Time'], r['Total Time']))
+                    ws.cell(row=curr_row, column=5, value=tache_finale)
                     
-                    ws.cell(row=curr_row, column=4, value=calculer_pause_unique("RECEPTION", r['Start Time'], r['Total Time']))
-                    ws.cell(row=curr_row, column=5, value="QBE" if is_qbe else t_p[i])
-                    
-                    # Styles d'origine préservés
                     for c in range(1, 6):
                         cell = ws.cell(row=curr_row, column=c)
                         cell.border = border_thin
@@ -310,29 +346,50 @@ if uploaded_file is not None:
             
             for c in range(1, 6): 
                 ws.cell(row=curr_row-1, column=c).border = border_thick_bottom
+                
         elif section == "LOUNGE":
-            lg_list = list(lg_data.iterrows())
             for i, (_, r) in enumerate(lg_list):
                 ws.cell(row=curr_row, column=1, value=extraire_prenom(r['Employee']))
                 h_end_lg = str(r['End Time']).strip() if str(r['End Time']).strip() != 'nan' else ""
                 ws.cell(row=curr_row, column=2, value=f"{r['Start Time']}-{h_end_lg}").font = font_normal_bold
-                t = "Ouverture" if i == 0 else "Fermeture" if i == len(lg_list)-1 else "Accueil" if i == 1 else ""
+                
+                # --- NOUVELLE LOGIQUE LOUNGE : Ouverture, Accueil, Fermeture ---
+                note_str = str(r['Note']).lower()
+                is_accueil = 'accueil' in note_str or 'acceuil' in note_str
+                
+                if is_accueil:
+                    t = "Accueil"
+                elif i == 0:
+                    t = "Ouverture"
+                elif i == total_lg - 1:
+                    t = "Fermeture"
+                else:
+                    t = ""
+                    
                 ws.cell(row=curr_row, column=5, value=t)
+                
                 cell_c = ws.cell(row=curr_row, column=3)
-                if t == "Accueil": cell_c.fill = black_fill
-                else: cell_c.value = caisse_num; caisse_num += 1
-                ws.cell(row=curr_row, column=4, value=calculer_pause_unique("LOUNGE", r['Start Time'], r['Total Time']))
-                for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thin; ws.cell(row=curr_row, column=c).font = font_normal
+                if is_accueil: 
+                    cell_c.fill = black_fill
+                else: 
+                    cell_c.value = map_caisses.get((r['Employee'], str(r['Start Time'])), "")
+                    
+                # Appel de la fonction de pause (False = ce n'est pas un QBE)
+                ws.cell(row=curr_row, column=4, value=calculer_pause_unique(False, r['Start Time'], r['Total Time']))
+                
+                for c in range(1, 6): 
+                    ws.cell(row=curr_row, column=c).border = border_thin
+                    ws.cell(row=curr_row, column=c).font = font_normal
                 curr_row += 1
-            for c in range(1, 6): ws.cell(row=curr_row-1, column=c).border = border_thick_bottom
+                
+            for c in range(1, 6): 
+                ws.cell(row=curr_row-1, column=c).border = border_thick_bottom
 
     # 4. SECTION FINALE
     cercles_18_colles = "○" * 18
     
-    # Création d'une police dynamique pour le message de fin (en noir, taille 16)
     police_fin_theme = Font(name=theme_actuel["font"], color="000000", bold=True, size=16)
     
-    # Intégration du message et de la police de fin
     sections_finales = [
         ("VENTES FIDÉLITÉS", cercles_18_colles, font_titre_secondaire), 
         ("SOINS", cercles_18_colles, font_titre_secondaire), 
@@ -346,7 +403,6 @@ if uploaded_file is not None:
         cell_t.font = police_a_utiliser
         ws.row_dimensions[curr_row].height = 30
         
-        # AJOUT : Bordure épaisse pour ce titre
         for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thick_all
         curr_row += 1
         
@@ -374,10 +430,8 @@ if uploaded_file is not None:
         col_letter = get_column_letter(i)
         
         if i == 1:
-            # Forcer la colonne A à 25.5
             ws.column_dimensions[col_letter].width = 25.5
         else:
-            # Auto-size pour les colonnes B à E
             max_length = 0
             for row in ws.iter_rows(min_col=i, max_col=i):
                 for cell in row:
