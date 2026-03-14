@@ -76,6 +76,7 @@ if uploaded_file is not None:
     border_thick_bottom = Border(left=thin, right=thin, top=thin, bottom=thick)
     center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
     center_no_wrap = Alignment(horizontal="center", vertical="center", wrap_text=False)
+    border_thick_all = Border(left=thick, right=thick, top=thick, bottom=thick)
 
     pauses_attribuees = {} 
 
