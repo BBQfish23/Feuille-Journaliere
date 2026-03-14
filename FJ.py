@@ -380,23 +380,38 @@ if uploaded_file is not None:
                 ws.cell(row=curr_row-1, column=c).border = border_thick_bottom
                 
         elif section == "LOUNGE":
+            # 1. Trouver l'employé qui finit le plus tard pour assigner la Fermeture
+            index_fermeture = -1
+            max_end_minutes = -1
+            
+            for idx_temp, (_, r_temp) in enumerate(lg_list):
+                end_mins = str_to_minutes(r_temp['End Time'])
+                # L'utilisation de >= permet de donner la fermeture à celui qui a 
+                # commencé le plus tard en cas d'égalité d'heure de fin.
+                if end_mins >= max_end_minutes:
+                    max_end_minutes = end_mins
+                    index_fermeture = idx_temp
+
+            # 2. Boucle d'affichage et d'assignation
             for i, (_, r) in enumerate(lg_list):
                 ws.cell(row=curr_row, column=1, value=extraire_prenom(r['Employee']))
+                
                 h_end_lg = str(r['End Time']).strip()
                 h_end_lg = h_end_lg if h_end_lg != '0' and h_end_lg != '' else ""
                 h_start_lg = str(r['Start Time']).strip()
                 
                 ws.cell(row=curr_row, column=2, value=f"{h_start_lg}-{h_end_lg}").font = font_normal_bold
                 
+                # Assignation des tâches selon la nouvelle priorité
                 note_str = str(r['Note']).lower()
                 is_accueil = 'accueil' in note_str or 'acceuil' in note_str
                 
                 if is_accueil:
                     t = "Accueil"
+                elif i == index_fermeture:
+                    t = "Fermeture" # Donné à celui calculé par l'heure de fin
                 elif i == 0:
                     t = "Ouverture"
-                elif i == total_lg - 1:
-                    t = "Fermeture"
                 else:
                     t = ""
                     
