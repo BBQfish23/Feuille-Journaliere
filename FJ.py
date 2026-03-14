@@ -409,9 +409,9 @@ if uploaded_file is not None:
                 if is_accueil:
                     t = "Accueil"
                 elif i == index_fermeture:
-                    t = "Fermeture" # Donné à celui calculé par l'heure de fin
+                    t = "Fermeture Lounge" # Donné à celui calculé par l'heure de fin
                 elif i == 0:
-                    t = "Ouverture"
+                    t = "Ouverture Lounge"
                 else:
                     t = ""
                     
