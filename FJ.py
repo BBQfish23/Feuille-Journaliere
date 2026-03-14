@@ -76,15 +76,18 @@ def str_to_minutes(t_str):
 uploaded_file = st.file_uploader("Choisir le fichier CSV", type="csv")
 
 if uploaded_file is not None:
-    # 1. NETTOYAGE BLINDÉ DU FICHIER
+   # 1. NETTOYAGE BLINDÉ DU FICHIER
     df = pd.read_csv(uploaded_file)
     df.columns = df.columns.str.strip()
     
-    for col in df.columns:
-        if df[col].dtype == object:
+    # FORCER les colonnes importantes à être du texte (string) pour éviter les crashs
+    colonnes_texte = ['Start Time', 'End Time', 'Note', 'Area', 'Employee', 'Start Date']
+    for col in colonnes_texte:
+        if col in df.columns:
+            # On remplace les vides par '', puis on force le format texte, puis on enlève les espaces
             df[col] = df[col].fillna('').astype(str).str.strip()
-        else:
-            df[col] = df[col].fillna(0)
+            # Si Pandas a transformé un vide en 'nan' ou '0.0', on le nettoie
+            df[col] = df[col].replace({'nan': '', '0.0': '', '0': ''})
 
     try:
         date_brute = df['Start Date'].iloc[0]
