@@ -171,24 +171,69 @@ if uploaded_file is not None:
             rm = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] < '12:00')].sort_values('Start Time')
             qbe = df[df['Area'].str.contains('QUALITÉ ET BIEN ÊTRE', case=False)].sort_values('Start Time')
             rs = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] >= '12:00')].sort_values('Start Time')
-            cycle_p = ["Poste 4", "Poste 1", "Poste 3", "Poste 2", "Poste 5"]
+            
+            # --- NOUVELLE LOGIQUE DE POSTES INTELLIGENTE ---
+            ordre_postes = ["Poste 4", "Poste 1", "Poste 3", "Poste 2", "Poste 5"]
+            fin_postes = {p: "00:00" for p in ordre_postes} # Mémoire des heures de fin par poste
+            
+            def str_to_minutes(t_str):
+                # Convertit 'HH:MM' en minutes pour faciliter les comparaisons
+                try:
+                    h, m = map(int, str(t_str).split(':'))
+                    return h * 60 + m
+                except:
+                    return 1440 # Fin de journée par défaut si l'heure est manquante
+
             for group, is_qbe in [(rm, False), (qbe, True), (rs, False)]:
                 t_p = attribuer_taches_recep(len(group))
                 for i, (_, r) in enumerate(group.iterrows()):
                     ws.cell(row=curr_row, column=1, value=extraire_prenom(r['Employee']))
-                    h_end = str(r['End Time']).strip() if str(r['End Time']).strip() != 'nan' else ""
-                    quart_txt = f"{r['Start Time']}-{h_end}" + ("" if is_qbe else f" / {cycle_p[i%5]}")
+                    
+                    h_end = str(r['End Time']).strip()
+                    h_end = h_end if h_end != 'nan' and h_end != '' else ""
+                    
+                    if not is_qbe:
+                        start_min = str_to_minutes(r['Start Time'])
+                        
+                        # 1. Trouver les postes libres à l'heure d'arrivée
+                        postes_libres = [p for p in ordre_postes if str_to_minutes(fin_postes[p]) <= start_min]
+                        
+                        if postes_libres:
+                            # Prendre le premier poste libre selon l'ordre strict 4-1-3-2-5
+                            poste_attribue = postes_libres[0]
+                        else:
+                            # 2. Aucun poste libre : trouver celui qui se libère le plus tôt
+                            # En cas d'égalité d'heure, l'ordre de priorité (index) départage
+                            poste_attribue = min(ordre_postes, key=lambda p: (str_to_minutes(fin_postes[p]), ordre_postes.index(p)))
+                        
+                        # Mettre à jour l'heure à laquelle ce poste sera de nouveau libre
+                        fin_postes[poste_attribue] = h_end if h_end else "23:59"
+                        quart_txt = f"{r['Start Time']}-{h_end} / {poste_attribue}"
+                    else:
+                        # Les QBE gardent leur format d'origine sans poste
+                        quart_txt = f"{r['Start Time']}-{h_end}"
+                        
                     ws.cell(row=curr_row, column=2, value=quart_txt).font = font_normal_bold
+                    
                     c_val = ("VAM" if i == 0 else "VPM") if is_qbe else caisse_num
                     ws.cell(row=curr_row, column=3, value=c_val)
                     if not is_qbe: caisse_num += 1
+                    
                     ws.cell(row=curr_row, column=4, value=calculer_pause_unique("RECEPTION", r['Start Time'], r['Total Time']))
                     ws.cell(row=curr_row, column=5, value="QBE" if is_qbe else t_p[i])
+                    
+                    # Styles d'origine préservés
                     for c in range(1, 6):
-                        cell = ws.cell(row=curr_row, column=c); cell.border = border_thin; cell.font = font_normal
-                        if is_qbe: cell.fill = dark_gray_fill; cell.font = font_qbe
+                        cell = ws.cell(row=curr_row, column=c)
+                        cell.border = border_thin
+                        cell.font = font_normal
+                        if is_qbe: 
+                            cell.fill = dark_gray_fill
+                            cell.font = font_qbe
                     curr_row += 1
-            for c in range(1, 6): ws.cell(row=curr_row-1, column=c).border = border_thick_bottom
+            
+            for c in range(1, 6): 
+                ws.cell(row=curr_row-1, column=c).border = border_thick_bottom
         elif section == "LOUNGE":
             lg_list = list(lg_data.iterrows())
             for i, (_, r) in enumerate(lg_list):
