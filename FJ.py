@@ -167,7 +167,7 @@ if uploaded_file is not None:
             if c in headers: cell.value = headers[c]
         curr_row += 1
 
- if section == "RÉCEPTION":
+     if section == "RÉCEPTION":
         # 1. Préparation des données
         rm = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] < '12:00')].sort_values('Start Time')
         qbe = df[df['Area'].str.contains('QUALITÉ ET BIEN ÊTRE', case=False)].sort_values('Start Time')
