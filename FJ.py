@@ -23,6 +23,43 @@ st.set_page_config(page_title="Générateur d'Horaire Spa", layout="centered")
 st.title("📅 Générateur d'Horaire Réception")
 st.markdown("Déposez votre export **Deputy CSV** pour générer la feuille journalière formatée.")
 
+# --- SÉLECTION DU THÈME ---
+liste_themes = [
+    "Standard", 
+    "Printemps", "Été", "Automne", "Hiver",
+    "Nouvel An", "Saint-Valentin", "Pâques", "Fête des Mères", "Fête des Pères", 
+    "Saint-Jean-Baptiste", "Fête du Canada", "Action de grâce", "Halloween", "Temps des Fêtes",
+    "Semaine de Relâche", "Jour de Pluie (Cocooning)", "Canicule", "Grosse Journée", "Événement VIP"
+]
+
+theme_choisi = st.selectbox("🎭 Choisissez un thème pour l'horaire :", liste_themes)
+
+# Dictionnaire complet des thèmes (Émojis, messages et POLICES)
+themes_config = {
+    "Standard": {"emoji": "", "msg_fin": "BONNE JOURNÉE !", "font": "Calibri"},
+    "Printemps": {"emoji": "🌱", "msg_fin": "BONNE JOURNÉE ! 🌷", "font": "Comic Sans MS"},
+    "Été": {"emoji": "☀️", "msg_fin": "BONNE JOURNÉE SOUS LE SOLEIL ! 🕶️", "font": "Trebuchet MS"},
+    "Automne": {"emoji": "🍂", "msg_fin": "BEL AUTOMNE ET BONNE JOURNÉE ! 🍁", "font": "Georgia"},
+    "Hiver": {"emoji": "❄️", "msg_fin": "BONNE JOURNÉE ! ⛄", "font": "Century Gothic"},
+    "Nouvel An": {"emoji": "🎉", "msg_fin": "BONNE ANNÉE ! 🥂", "font": "Trebuchet MS"},
+    "Saint-Valentin": {"emoji": "🤍", "msg_fin": "JOYEUSE SAINT-VALENTIN ! 🕊️", "font": "Georgia"},
+    "Pâques": {"emoji": "🐇", "msg_fin": "JOYEUSES PÂQUES ! 🥚", "font": "Comic Sans MS"},
+    "Fête des Mères": {"emoji": "💐", "msg_fin": "BONNE FÊTE DES MÈRES ! 🌸", "font": "Georgia"},
+    "Fête des Pères": {"emoji": "☕", "msg_fin": "BONNE FÊTE DES PÈRES ! 👔", "font": "Times New Roman"},
+    "Saint-Jean-Baptiste": {"emoji": "⚜️", "msg_fin": "BONNE FÊTE NATIONALE ! ⚜️", "font": "Impact"},
+    "Fête du Canada": {"emoji": "🍁", "msg_fin": "BONNE FÊTE DU CANADA ! 🎆", "font": "Impact"},
+    "Action de grâce": {"emoji": "🦃", "msg_fin": "JOYEUSE ACTION DE GRÂCE ! 🍂", "font": "Georgia"},
+    "Halloween": {"emoji": "👻", "msg_fin": "JOYEUSE HALLOWEEN ! 🎃", "font": "Impact"},
+    "Temps des Fêtes": {"emoji": "🎄", "msg_fin": "JOYEUSES FÊTES ! ✨", "font": "Courier New"},
+    "Semaine de Relâche": {"emoji": "⛷️", "msg_fin": "BONNE RELÂCHE ! ☕", "font": "Comic Sans MS"},
+    "Jour de Pluie (Cocooning)": {"emoji": "🌧️", "msg_fin": "BONNE JOURNÉE COCOONING ! 🍵", "font": "Courier New"},
+    "Canicule": {"emoji": "🌡️", "msg_fin": "RESTEZ AU FRAIS ! 🧊", "font": "Arial Black"},
+    "Grosse Journée": {"emoji": "💪", "msg_fin": "EXCELLENTE JOURNÉE, ON LÂCHE PAS ! 🔥", "font": "Arial Black"},
+    "Événement VIP": {"emoji": "⭐", "msg_fin": "EXCELLENTE JOURNÉE VIP ! 🥂", "font": "Times New Roman"}
+}
+
+theme_actuel = themes_config[theme_choisi]
+
 # --- FONCTIONS UTILITAIRES ---
 def extraire_prenom(nom_complet):
     if pd.isna(nom_complet): return "N/A"
@@ -59,7 +96,6 @@ if uploaded_file is not None:
     ws.title = "Horraire Spa"
 
     # Styles
-    font_titre_principal = Font(color="FFFFFF", bold=True, size=18)
     font_titre_secondaire = Font(color="000000", bold=True, size=16)
     font_superviseur_dept = Font(color="000000", bold=True, size=12)
     font_normal = Font(color="000000", size=11)
@@ -96,9 +132,19 @@ if uploaded_file is not None:
     # 1. Titre Principal
     ws.merge_cells('A1:E1')
     ws.row_dimensions[1].height = 45
-    ws['A1'] = f"Département Réception | {date_formatee}"
+    
+    # Intégration des émojis du thème
+    titre_texte = f"Département Réception | {date_formatee}"
+    if theme_actuel["emoji"]:
+        titre_texte = f"{theme_actuel['emoji']} {titre_texte} {theme_actuel['emoji']}"
+        
+    ws['A1'] = titre_texte
     ws['A1'].fill = dark_gray_fill
-    ws['A1'].font = font_titre_principal
+    
+    # Création d'une police dynamique pour le titre principal
+    police_titre_theme = Font(name=theme_actuel["font"], color="FFFFFF", bold=True, size=18)
+    ws['A1'].font = police_titre_theme
+    
     ws['A1'].alignment = center_align
     # AJOUT : Bordure épaisse sur toutes les cellules de la ligne 1
     for c in range(1, 6): ws.cell(row=1, column=c).border = border_thick_all
@@ -282,18 +328,34 @@ if uploaded_file is not None:
 
     # 4. SECTION FINALE
     cercles_18_colles = "○" * 18
-    sections_finales = [("VENTES FIDÉLITÉS", cercles_18_colles), ("SOINS", cercles_18_colles), ("BONNE JOURNÉE !", None)]
-    for titre, contenu in sections_finales:
+    
+    # Création d'une police dynamique pour le message de fin (en noir, taille 16)
+    police_fin_theme = Font(name=theme_actuel["font"], color="000000", bold=True, size=16)
+    
+    # Intégration du message et de la police de fin
+    sections_finales = [
+        ("VENTES FIDÉLITÉS", cercles_18_colles, font_titre_secondaire), 
+        ("SOINS", cercles_18_colles, font_titre_secondaire), 
+        (theme_actuel["msg_fin"], None, police_fin_theme)
+    ]
+    
+    for titre, contenu, police_a_utiliser in sections_finales:
         ws.merge_cells(start_row=curr_row, start_column=1, end_row=curr_row, end_column=5)
         cell_t = ws.cell(row=curr_row, column=1, value=titre)
-        cell_t.fill = light_gray_fill; cell_t.font = font_titre_secondaire; ws.row_dimensions[curr_row].height = 30
+        cell_t.fill = light_gray_fill
+        cell_t.font = police_a_utiliser
+        ws.row_dimensions[curr_row].height = 30
+        
         # AJOUT : Bordure épaisse pour ce titre
         for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thick_all
         curr_row += 1
+        
         if contenu:
             ws.merge_cells(start_row=curr_row, start_column=1, end_row=curr_row, end_column=5)
             cell_c = ws.cell(row=curr_row, column=1, value=contenu)
-            cell_c.font = font_cercles; cell_c.alignment = center_no_wrap; ws.row_dimensions[curr_row].height = 45
+            cell_c.font = font_cercles
+            cell_c.alignment = center_no_wrap
+            ws.row_dimensions[curr_row].height = 45
             for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thin
             curr_row += 1
 
