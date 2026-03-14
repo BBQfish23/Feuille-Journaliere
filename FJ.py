@@ -78,9 +78,9 @@ uploaded_file = st.file_uploader("Choisir le fichier CSV", type="csv")
 if uploaded_file is not None:
     # 1. BLINDAGE DU CHARGEMENT DES DONNÉES
     df = pd.read_csv(uploaded_file)
-    df.columns = df.columns.str.strip() # Enlève les espaces invisibles dans les noms de colonnes
+    df.columns = df.columns.str.strip() # Enlève les espaces invisibles
     
-    # Remplissage sécuritaire des valeurs vides (NaN) pour éviter les plantages de filtres
+    # Remplissage sécuritaire des valeurs vides (NaN)
     for col in ['Start Time', 'End Time', 'Note', 'Area', 'Employee']:
         if col in df.columns:
             df[col] = df[col].fillna('')
@@ -99,7 +99,7 @@ if uploaded_file is not None:
     # --- CRÉATION DU EXCEL ---
     wb = Workbook()
     ws = wb.active
-    ws.title = "Horraire Spa"
+    ws.title = "Horaire Spa"
 
     # Styles
     font_titre_secondaire = Font(color="000000", bold=True, size=16)
@@ -129,10 +129,13 @@ if uploaded_file is not None:
             if val < 5.5: return "15 min"
             fmt = "%H:%M"
             
+            # Base 3 heures après l'arrivée
             base = datetime.strptime(str(heure_debut_str).strip(), fmt) + timedelta(hours=3)
+            # Pas de pause avant 11h30
             earliest = datetime.strptime("11:30", fmt)
             current_pause = max(base, earliest)
             
+            # Arrondi à 30 min supérieures
             minute = current_pause.minute
             if 0 < minute <= 30:
                 current_pause = current_pause.replace(minute=30)
@@ -156,7 +159,7 @@ if uploaded_file is not None:
                     return str_pause
                 
                 current_pause += timedelta(minutes=30)
-                if current_pause.hour < 6: return "-"
+                if current_pause.hour < 6: return "-" # Sécurité anti-boucle infinie
         except: 
             return "-"
 
@@ -192,16 +195,13 @@ if uploaded_file is not None:
     ]
 
     for label, search in ordres_sup:
-        # L'ajout de na=False protège contre les plantages silencieux
         found = df[df['Area'].str.contains(search, case=False, na=False)]
         
         if label == "Maintenance":
-            # CORRECTION CRITIQUE : on utilise "found['Note']" et non "df['Note']" pour éviter l'erreur d'Index
             found = found[found['Note'].str.contains('Sur Appel', case=False, na=False)]
             if found.empty:
                 found = pd.DataFrame([{'Employee': 'Adam', 'Start Time': 'Sur Appel', 'End Time': '', 'Total Time': 0}])
         else:
-            # CORRECTION CRITIQUE : pareil ici, on utilise "found" des deux côtés
             found = found[(found['Area'].str.contains('Supervision|Responsable|Chef', case=False, na=False) | 
                            found['Note'].str.contains('Responsable|Supervision', case=False, na=False))]
 
@@ -241,7 +241,6 @@ if uploaded_file is not None:
                 ws.merge_cells(start_row=start_m, start_column=1, end_row=curr_row-1, end_column=1)
 
     # --- PRÉPARATION GLOBALE DES CAISSES ---
-    # Sécurisation des recherches textuelles (na=False et conversion en string)
     rm = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False, na=False) & (df['Start Time'].astype(str) < '12:00')].sort_values('Start Time')
     qbe = df[df['Area'].str.contains('QUALITÉ ET BIEN ÊTRE', case=False, na=False)].sort_values('Start Time')
     rs = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False, na=False) & (df['Start Time'].astype(str) >= '12:00')].sort_values('Start Time')
@@ -287,7 +286,7 @@ if uploaded_file is not None:
         curr_row += 1
 
         if section == "RÉCEPTION":
-            # Pool de tâches agrandi (* 50) pour empêcher une erreur si vous avez beaucoup d'employés
+            # Pool de tâches agrandi (* 50) 
             pool_taches = ["Nettoyage boutique"] + ["Objet perdus", "Aide entre dept."] * 50
             random.shuffle(pool_taches) 
             
