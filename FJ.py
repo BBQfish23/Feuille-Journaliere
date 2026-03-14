@@ -56,7 +56,7 @@ if uploaded_file is not None:
     # --- CRÉATION DU EXCEL ---
     wb = Workbook()
     ws = wb.active
-    ws.title = "Horaire Spa"
+    ws.title = "Horraire Spa"
 
     # Styles
     font_titre_principal = Font(color="FFFFFF", bold=True, size=18)
@@ -297,7 +297,7 @@ if uploaded_file is not None:
             for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thin
             curr_row += 1
 
-    # --- AUTO-SIZE ET BORDURES FINALES ---
+   # --- AUTO-SIZE ET BORDURES FINALES ---
     max_row = curr_row - 1
     for r in range(1, max_row + 1):
         for c in range(1, 6):
@@ -307,19 +307,26 @@ if uploaded_file is not None:
             cell.border = Border(left=(thick if c == 1 else cb.left), right=(thick if c == 5 else cb.right), 
                                 top=(thick if r == 1 else cb.top), bottom=(thick if r == max_row else cb.bottom))
 
+    # Ajustement des largeurs de colonnes
     for i in range(1, 6):
-        max_length = 0
         col_letter = get_column_letter(i)
-        for row in ws.iter_rows(min_col=i, max_col=i):
-            for cell in row:
-                if cell.coordinate not in ws.merged_cells or cell.column == 1:
-                    try:
-                        if cell.value:
-                            length = len(str(cell.value))
-                            if cell.font.bold: length += 2
-                            if length > max_length: max_length = length
-                    except: pass
-        ws.column_dimensions[col_letter].width = max_length + 3
+        
+        if i == 1:
+            # Forcer la colonne A à 25.5
+            ws.column_dimensions[col_letter].width = 25.5
+        else:
+            # Auto-size pour les colonnes B à E
+            max_length = 0
+            for row in ws.iter_rows(min_col=i, max_col=i):
+                for cell in row:
+                    if cell.coordinate not in ws.merged_cells or cell.column == 1:
+                        try:
+                            if cell.value:
+                                length = len(str(cell.value))
+                                if cell.font and cell.font.bold: length += 2
+                                if length > max_length: max_length = length
+                        except: pass
+            ws.column_dimensions[col_letter].width = max_length + 3
 
     # --- TÉLÉCHARGEMENT ---
     output = io.BytesIO()
