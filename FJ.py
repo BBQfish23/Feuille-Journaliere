@@ -167,43 +167,79 @@ if uploaded_file is not None:
             if c in headers: cell.value = headers[c]
         curr_row += 1
 
-        if section == "RÉCEPTION":
-            rm = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] < '12:00')].sort_values('Start Time')
-            qbe = df[df['Area'].str.contains('QUALITÉ ET BIEN ÊTRE', case=False)].sort_values('Start Time')
-            rs = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] >= '12:00')].sort_values('Start Time')
-            cycle_p = ["Poste 4", "Poste 1", "Poste 3", "Poste 2", "Poste 5"]
-            for group, is_qbe in [(rm, False), (qbe, True), (rs, False)]:
-                t_p = attribuer_taches_recep(len(group))
-                for i, (_, r) in enumerate(group.iterrows()):
-                    ws.cell(row=curr_row, column=1, value=extraire_prenom(r['Employee']))
-                    h_end = str(r['End Time']).strip() if str(r['End Time']).strip() != 'nan' else ""
-                    quart_txt = f"{r['Start Time']}-{h_end}" + ("" if is_qbe else f" / {cycle_p[i%5]}")
-                    ws.cell(row=curr_row, column=2, value=quart_txt).font = font_normal_bold
-                    c_val = ("VAM" if i == 0 else "VPM") if is_qbe else caisse_num
-                    ws.cell(row=curr_row, column=3, value=c_val)
-                    if not is_qbe: caisse_num += 1
-                    ws.cell(row=curr_row, column=4, value=calculer_pause_unique("RECEPTION", r['Start Time'], r['Total Time']))
-                    ws.cell(row=curr_row, column=5, value="QBE" if is_qbe else t_p[i])
-                    for c in range(1, 6):
-                        cell = ws.cell(row=curr_row, column=c); cell.border = border_thin; cell.font = font_normal
-                        if is_qbe: cell.fill = dark_gray_fill; cell.font = font_qbe
-                    curr_row += 1
-            for c in range(1, 6): ws.cell(row=curr_row-1, column=c).border = border_thick_bottom
-        elif section == "LOUNGE":
-            lg_list = list(lg_data.iterrows())
-            for i, (_, r) in enumerate(lg_list):
+ if section == "RÉCEPTION":
+        # 1. Préparation des données
+        rm = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] < '12:00')].sort_values('Start Time')
+        qbe = df[df['Area'].str.contains('QUALITÉ ET BIEN ÊTRE', case=False)].sort_values('Start Time')
+        rs = df[df['Area'].str.contains('RÉCEPTION- Responsable', case=False) & (df['Start Time'] >= '12:00')].sort_values('Start Time')
+        
+        # Combinaison pour la logique de postes (on exclut QBE de l'attribution des postes 1-5)
+        reception_staff = pd.concat([rm, rs]).sort_values(['Start Time', 'End Time'])
+        
+        # --- LOGIQUE D'ASSIGNATION DES POSTES DYNAMIQUE ---
+        postes_occupes = {} # {numero_poste: "Heure de fin"}
+        assignations_finales = {} # {index_employe: "Poste X"}
+        ordre_prefere = [4, 1, 3, 2, 5]
+
+        for idx, emp in reception_staff.iterrows():
+            heure_debut = emp['Start Time']
+            poste_trouve = None
+            
+            # A. Libérer les postes dont l'occupant est déjà parti
+            postes_a_liberer = [p for p, fin in postes_occupes.items() if fin <= heure_debut]
+            for p in postes_a_liberer:
+                del postes_occupes[p]
+            
+            # B. Essayer de prendre le prochain poste dans l'ordre s'il est libre
+            for p in ordre_prefere:
+                if p not in postes_occupes:
+                    poste_trouve = p
+                    break
+            
+            # C. Si TOUT est occupé, on prend celui qui finit le plus tôt
+            if poste_trouve is None:
+                poste_le_plus_proche_de_finir = min(postes_occupes, key=postes_occupes.get)
+                poste_trouve = poste_le_plus_proche_de_finir
+            
+            # D. Enregistrement
+            assignations_finales[idx] = f"Poste {poste_trouve}"
+            postes_occupes[poste_trouve] = emp['End Time']
+
+        # --- BOUCLE D'AFFICHAGE UNIQUE (TRES IMPORTANT) ---
+        for group, is_qbe in [(rm, False), (qbe, True), (rs, False)]:
+            t_p = attribuer_taches_recep(len(group))
+            for i, (idx, r) in enumerate(group.iterrows()):
                 ws.cell(row=curr_row, column=1, value=extraire_prenom(r['Employee']))
-                h_end_lg = str(r['End Time']).strip() if str(r['End Time']).strip() != 'nan' else ""
-                ws.cell(row=curr_row, column=2, value=f"{r['Start Time']}-{h_end_lg}").font = font_normal_bold
-                t = "Ouverture" if i == 0 else "Fermeture" if i == len(lg_list)-1 else "Accueil" if i == 1 else ""
-                ws.cell(row=curr_row, column=5, value=t)
-                cell_c = ws.cell(row=curr_row, column=3)
-                if t == "Accueil": cell_c.fill = black_fill
-                else: cell_c.value = caisse_num; caisse_num += 1
-                ws.cell(row=curr_row, column=4, value=calculer_pause_unique("LOUNGE", r['Start Time'], r['Total Time']))
-                for c in range(1, 6): ws.cell(row=curr_row, column=c).border = border_thin; ws.cell(row=curr_row, column=c).font = font_normal
+                
+                # Récupération du poste calculé ou QBE
+                pos_txt = "QBE" if is_qbe else assignations_finales.get(idx, "")
+                h_end = str(r['End Time']).strip() if str(r['End Time']).strip() != 'nan' else ""
+                
+                # On assemble le texte final (Heures / Poste)
+                quart_txt = f"{r['Start Time']}-{h_end} / {pos_txt}"
+                ws.cell(row=curr_row, column=2, value=quart_txt).font = font_normal_bold
+                
+                # Caisse
+                c_val = ("VAM" if i == 0 else "VPM") if is_qbe else caisse_num
+                ws.cell(row=curr_row, column=3, value=c_val)
+                if not is_qbe: caisse_num += 1
+                
+                ws.cell(row=curr_row, column=4, value=calculer_pause_unique("RECEPTION", r['Start Time'], r['Total Time']))
+                ws.cell(row=curr_row, column=5, value="QBE" if is_qbe else t_p[i])
+                
+                # Style des cellules
+                for c in range(1, 6):
+                    cell = ws.cell(row=curr_row, column=c)
+                    cell.border = border_thin
+                    cell.font = font_normal
+                    if is_qbe:
+                        cell.fill = dark_gray_fill
+                        cell.font = font_qbe
                 curr_row += 1
-            for c in range(1, 6): ws.cell(row=curr_row-1, column=c).border = border_thick_bottom
+        
+        # Bordure épaisse en bas de la section complète
+        for c in range(1, 6): 
+            ws.cell(row=curr_row-1, column=c).border = border_thick_bottom
 
     # 4. SECTION FINALE
     cercles_18_colles = "○" * 18
