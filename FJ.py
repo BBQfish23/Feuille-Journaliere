@@ -96,7 +96,7 @@ if uploaded_file is not None:
     # 1. Titre Principal
     ws.merge_cells('A1:E1')
     ws.row_dimensions[1].height = 45
-    ws['A1'] = f"Réception | {date_formatee}"
+    ws['A1'] = f"Département Réception | {date_formatee}"
     ws['A1'].fill = dark_gray_fill
     ws['A1'].font = font_titre_principal
     ws['A1'].alignment = center_align
