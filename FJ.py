@@ -83,6 +83,59 @@ def formater_date_fr(date_obj):
 
 
 # --- HELPERS POUR L'IMPORT EMPREZ (Excel hebdomadaire) ---
+
+import unicodedata
+
+def _normaliser(s):
+    """minuscule + sans accents, pour comparer les prénoms de façon fiable."""
+    s = unicodedata.normalize('NFD', str(s))
+    return ''.join(c for c in s if unicodedata.category(c) != 'Mn').lower().strip()
+
+# Liste de prénoms connus. Sert à détecter automatiquement les PRÉNOMS COMPOSÉS :
+# dans Emprez le nom est "Nom Prénom", on prend le dernier mot comme prénom, MAIS
+# si l'avant-dernier mot est lui aussi un prénom connu, le prénom est composé
+# (ex. "Grigoratus Lorena Gabriela" -> "Lorena").
+PRENOMS_CONNUS = {_normaliser(x) for x in [
+    # Prénoms (et premiers éléments de prénoms composés) du personnel
+    "Megan", "Mariela", "Leanne", "Lina", "Nicolas", "Louis", "Magalie", "Amery",
+    "Yasmine", "Kymia", "Anais", "Anaïs", "Sarah", "Maude", "Adam", "Brithany",
+    "Ariane", "Sabrina", "Lee", "Anne", "Marie", "Lyne", "Rosemarie", "Oceane",
+    "Annabel", "Ana", "Gabrielle", "Gabriela", "Lorena", "Bethsaida", "Kianna",
+    "Jasmine", "Alexandra", "Ophelie", "Alexane", "Michael", "Rosalie", "Maxime",
+    "Cloe", "Joyce", "Christine", "Emily", "Naellie", "Shenna", "Laurie", "Elyse",
+    "Alyssa", "Imen", "Elisabeth", "Chloe", "Brittany", "Rukhsar", "Janie", "Sofia",
+    "Gary", "Christel", "Benjamin",
+    # Prénoms courants additionnels
+    "Marc", "Jean", "Pierre", "Paul", "Luc", "Eric", "David", "Julie", "Karine",
+    "Stephanie", "Melanie", "Nathalie", "Isabelle", "Caroline", "Veronique",
+    "Catherine", "Genevieve", "Audrey", "Camille", "Laurence", "Maude", "Noemie",
+    "Laura", "Emma", "Olivia", "Charles", "William", "Thomas", "Samuel", "Antoine",
+    "Felix", "Gabriel", "Raphael", "Mathis", "Nora", "Sara", "Lea", "Juliette",
+    "Mia", "Alice", "Florence", "Maya", "Victoria", "Daphne", "Beatrice",
+]}
+
+# Filet de sécurité manuel : pour tout cas que la détection auto raterait, on force
+# ici le prénom. Clé = nom de famille (1er mot dans Emprez, sans accents/minuscule),
+# valeur = prénom à afficher. Exemple : "gonzales": "Ana"
+PRENOMS_OVERRIDE = {
+}
+
+def extraire_prenom_emprez(nom_complet):
+    """Détermine le prénom à afficher depuis un nom Emprez "Nom Prénom(s)"."""
+    tokens = str(nom_complet).split()
+    if not tokens:
+        return "N/A"
+    # 1) Override manuel prioritaire (par nom de famille = 1er mot)
+    cle = _normaliser(tokens[0])
+    if cle in PRENOMS_OVERRIDE:
+        return PRENOMS_OVERRIDE[cle]
+    # 2) Détection auto des prénoms composés : si l'avant-dernier mot est un
+    #    prénom connu, c'est le début du prénom composé.
+    if len(tokens) >= 3 and _normaliser(tokens[-2]) in PRENOMS_CONNUS:
+        return tokens[-2]
+    # 3) Par défaut : le dernier mot
+    return tokens[-1]
+
 def lire_excel(file):
     """Lit un fichier Excel Emprez peu importe le moteur (xlsx déguisé en .xls inclus)."""
     data = file.read()
@@ -164,13 +217,11 @@ def charger_emprez(df_raw, jour_col, date_str):
             continue
         start, end, poste, note = parsed
         area = classifier_poste_emprez(poste)
-        # Dans Emprez le nom est "Nom Prénom" : le prénom est le dernier mot.
-        # On reconstruit "Prénom Nom" pour rester compatible avec extraire_prenom()
-        # tout en gardant un identifiant unique.
-        tokens = nom_complet.split()
-        prenom = tokens[-1]
-        reste = ' '.join(tokens[:-1])
-        employee = f"{prenom} {reste}".strip()
+        # Dans Emprez le nom est "Nom Prénom" : on détecte le prénom (gère les
+        # prénoms composés) puis on reconstruit "Prénom NomComplet" pour rester
+        # compatible avec extraire_prenom() tout en gardant un identifiant unique.
+        prenom = extraire_prenom_emprez(nom_complet)
+        employee = f"{prenom} {nom_complet}".strip()
         rows.append({
             'Employee': employee,
             'Start Time': start,
@@ -333,7 +384,15 @@ def generer_horaire(df, date_obj, date_formatee):
     interdits_globaux = ["18:00", "18:30"]
     interdits_qbe = ["10:00", "11:30", "13:00", "14:30", "16:00", "17:30", "19:00", "20:30"]
 
+    # weekday(): lundi=0 ... dimanche=6  -> "la semaine" = lundi au jeudi (0 à 3)
+    qbe_matin_1315 = date_obj.weekday() <= 3
     for emp, h_start, total_t, is_qbe in candidats_pauses:
+        # QBE du matin (quart débutant avant midi) : pause de midi fixée à 13h15,
+        # uniquement du lundi au jeudi. On ne réserve pas de créneau global
+        # (13:15 ne tombe jamais sur un :00/:30).
+        if qbe_matin_1315 and is_qbe and str_to_minutes(h_start) < 720:
+            map_pauses[(emp, h_start)] = "13:15"
+            continue
         try:
             val = float(total_t)
             if val < 5.5: 
