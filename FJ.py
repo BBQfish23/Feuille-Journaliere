@@ -13,6 +13,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import random
 import io
+import re
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
@@ -21,7 +22,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="Générateur d'Horaire Spa", layout="centered")
 
 st.title("📅 Générateur d'Horaire Réception")
-st.markdown("Déposez votre export **Deputy CSV** pour générer la feuille journalière formatée.")
+st.markdown("Générez la feuille journalière à partir d'un export **Deputy (CSV)** ou **Emprez (Excel hebdomadaire)**.")
 
 # --- SÉLECTION DU THÈME ---
 liste_themes = [
@@ -72,34 +73,121 @@ def str_to_minutes(t_str):
     except:
         return 1440 
 
-# --- INTERFACE DE CHARGEMENT ---
-uploaded_file = st.file_uploader("Choisir le fichier CSV", type="csv")
+# --- CONSTANTES DATES ---
+JOURS_FR = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+MOIS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
+           "septembre", "octobre", "novembre", "décembre"]
 
-if uploaded_file is not None:
-   # 1. NETTOYAGE BLINDÉ DU FICHIER
-    df = pd.read_csv(uploaded_file)
-    df.columns = df.columns.str.strip()
-    
-    # FORCER les colonnes importantes à être du texte (string) pour éviter les crashs
-    colonnes_texte = ['Start Time', 'End Time', 'Note', 'Area', 'Employee', 'Start Date']
-    for col in colonnes_texte:
-        if col in df.columns:
-            # On remplace les vides par '', puis on force le format texte, puis on enlève les espaces
-            df[col] = df[col].fillna('').astype(str).str.strip()
-            # Si Pandas a transformé un vide en 'nan' ou '0.0', on le nettoie
-            df[col] = df[col].replace({'nan': '', '0.0': '', '0': ''})
+def formater_date_fr(date_obj):
+    return f"{JOURS_FR[date_obj.weekday()]} {date_obj.day} {MOIS_FR[date_obj.month - 1]} {date_obj.year}"
 
+
+# --- HELPERS POUR L'IMPORT EMPREZ (Excel hebdomadaire) ---
+def lire_excel(file):
+    """Lit un fichier Excel Emprez peu importe le moteur (xlsx déguisé en .xls inclus)."""
+    data = file.read()
+    for eng in ('openpyxl', 'xlrd'):
+        try:
+            return pd.ExcelFile(io.BytesIO(data), engine=eng)
+        except Exception:
+            continue
+    raise ValueError("Format Excel non reconnu.")
+
+def parse_cellule_emprez(text):
+    """Retourne (start, end, poste, note) ou None si la cellule ne contient pas de quart.
+
+    Format d'une cellule Emprez :
+        9h00 - 17h00
+        Responsable Réception
+        Principale
+        F: ACCUEIL        <- commentaire (accueil / sur appel ...) sous la mention F:
+    """
+    t = str(text)
+    if t.strip() == '' or t.strip().lower() == 'nan':
+        return None
+    m = re.search(r'(\d{1,2})h(\d{2})\s*-\s*(\d{1,2})h(\d{2})', t)
+    if not m:
+        return None
+    start = f"{int(m.group(1)):02d}:{int(m.group(2)):02d}"
+    end = f"{int(m.group(3)):02d}:{int(m.group(4)):02d}"
+    # Le commentaire est désormais sous la mention "F:"
+    fm = re.search(r'F\s*:\s*(.+)', t)
+    note = fm.group(1).strip() if fm else ''
+    # Le poste = tout le texte sauf la plage horaire et la ligne F:
+    poste = re.sub(r'\d{1,2}h\d{2}\s*-\s*\d{1,2}h\d{2}', ' ', t)
+    poste = re.sub(r'F\s*:.*', ' ', poste)
+    poste = ' '.join(poste.split())
+    return start, end, poste, note
+
+def classifier_poste_emprez(poste):
+    """Mappe un poste Emprez vers une 'Area' compatible avec la logique Deputy existante."""
+    p = poste.lower()
+    if 'maintenance' in p:
+        return 'Maintenance- spa'
+    if 'entretien' in p:
+        return 'ENTRETIEN MÉNAGER Responsable'
+    if 'soin' in p:
+        return 'MASSO Responsable'
+    if 'bistro' in p:
+        return 'Bistro - Supervision'
+    if 'opération' in p or 'operation' in p:
+        return 'Site extérieur - Supervision'
+    if 'superviseur' in p and ('réception' in p or 'reception' in p):
+        return 'Réception - Supervision'
+    if 'responsable réception' in p or 'responsable reception' in p:
+        if 'lounge' in p:
+            return 'Lounge'
+        if 'qualité' in p or 'qualite' in p:
+            return 'QUALITÉ ET BIEN ÊTRE'
+        return 'RÉCEPTION- Responsable Principale'
+    # Postes non gérés (réservations, ventes, stationnement...) : ne matchent aucun filtre
+    return poste
+
+def calc_total_emprez(start, end):
+    """Durée du quart en heures (utilisé pour la logique des pauses)."""
     try:
-        date_brute = df['Start Date'].iloc[0]
-        date_obj = datetime.strptime(str(date_brute), '%Y-%m-%d')
-        jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-        mois_fr = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
-        date_formatee = f"{jours_fr[date_obj.weekday()]} {date_obj.day} {mois_fr[date_obj.month - 1]} {date_obj.year}"
-        st.success(f"Fichier détecté pour le : {date_formatee}")
-    except Exception as e:
-        st.error("Erreur avec la lecture de la date. Le fichier est-il valide ?")
-        st.stop()
+        sh, sm = map(int, start.split(':'))
+        eh, em = map(int, end.split(':'))
+        return round(((eh * 60 + em) - (sh * 60 + sm)) / 60.0, 2)
+    except Exception:
+        return 8.0
 
+def charger_emprez(df_raw, jour_col, date_str):
+    """Construit un DataFrame au schéma Deputy à partir d'une colonne (journée) Emprez."""
+    rows = []
+    for idx in range(3, len(df_raw)):
+        nom_complet = str(df_raw.iloc[idx, 0]).strip()
+        if nom_complet == '' or nom_complet.lower() == 'nan':
+            continue
+        parsed = parse_cellule_emprez(df_raw.iloc[idx, jour_col])
+        if parsed is None:
+            continue
+        start, end, poste, note = parsed
+        area = classifier_poste_emprez(poste)
+        # Dans Emprez le nom est "Nom Prénom" : le prénom est le dernier mot.
+        # On reconstruit "Prénom Nom" pour rester compatible avec extraire_prenom()
+        # tout en gardant un identifiant unique.
+        tokens = nom_complet.split()
+        prenom = tokens[-1]
+        reste = ' '.join(tokens[:-1])
+        employee = f"{prenom} {reste}".strip()
+        rows.append({
+            'Employee': employee,
+            'Start Time': start,
+            'End Time': end,
+            'Area': area,
+            'Note': note,
+            'Total Time': calc_total_emprez(start, end),
+            'Start Date': date_str,
+        })
+    return pd.DataFrame(
+        rows,
+        columns=['Employee', 'Start Time', 'End Time', 'Area', 'Note', 'Total Time', 'Start Date']
+    )
+
+
+# --- GÉNÉRATION DE LA FEUILLE JOURNALIÈRE (commun Deputy / Emprez) ---
+def generer_horaire(df, date_obj, date_formatee):
     # --- CRÉATION DU EXCEL ---
     wb = Workbook()
     ws = wb.active
@@ -493,11 +581,87 @@ if uploaded_file is not None:
                         except: pass
             ws.column_dimensions[col_letter].width = max_length + 3
 
-    # --- TÉLÉCHARGEMENT ---
+    # --- RETOUR DES DONNÉES ---
     output = io.BytesIO()
     wb.save(output)
-    processed_data = output.getvalue()
+    return output.getvalue()
 
+
+# --- INTERFACE PRINCIPALE : CHOIX DE LA SOURCE ---
+source = st.radio(
+    "📂 Source des données :",
+    ["Deputy (CSV journalier)", "Emprez (Excel hebdomadaire)"]
+)
+
+df = None
+date_obj = None
+date_formatee = None
+
+if source == "Deputy (CSV journalier)":
+    uploaded_file = st.file_uploader("Choisir le fichier CSV", type="csv")
+    if uploaded_file is not None:
+        # 1. NETTOYAGE BLINDÉ DU FICHIER
+        df = pd.read_csv(uploaded_file)
+        df.columns = df.columns.str.strip()
+
+        # FORCER les colonnes importantes à être du texte (string) pour éviter les crashs
+        colonnes_texte = ['Start Time', 'End Time', 'Note', 'Area', 'Employee', 'Start Date']
+        for col in colonnes_texte:
+            if col in df.columns:
+                df[col] = df[col].fillna('').astype(str).str.strip()
+                df[col] = df[col].replace({'nan': '', '0.0': '', '0': ''})
+
+        try:
+            date_brute = df['Start Date'].iloc[0]
+            date_obj = datetime.strptime(str(date_brute), '%Y-%m-%d')
+            date_formatee = formater_date_fr(date_obj)
+            st.success(f"Fichier détecté pour le : {date_formatee}")
+        except Exception:
+            st.error("Erreur avec la lecture de la date. Le fichier est-il valide ?")
+            st.stop()
+
+else:  # Emprez (Excel hebdomadaire)
+    st.markdown(
+        "Déposez l'export **Emprez** (Excel d'une semaine), puis choisissez la **journée** "
+        "à générer (un seul jour est produit à la fois)."
+    )
+    uploaded_file = st.file_uploader("Choisir le fichier Excel", type=["xls", "xlsx"])
+    if uploaded_file is not None:
+        try:
+            xls = lire_excel(uploaded_file)
+            sheet_name = xls.sheet_names[0]
+            df_raw = xls.parse(sheet_name, header=None)
+        except Exception:
+            st.error("Impossible de lire le fichier Excel Emprez.")
+            st.stop()
+
+        # Déterminer le lundi de la semaine (à partir du nom de l'onglet, ex. "... 2026-06-08 ...")
+        m = re.search(r'(\d{4})-(\d{2})-(\d{2})', str(sheet_name))
+        if m:
+            lundi = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        else:
+            today = datetime.today()
+            lundi = today - timedelta(days=today.weekday())
+
+        # Sélecteur de date : les 7 jours de la semaine (colonnes 1 à 7)
+        jours_dispo = [lundi + timedelta(days=i) for i in range(7)]
+        labels = [formater_date_fr(d) for d in jours_dispo]
+        choix = st.selectbox("📅 Choisissez la journée à générer :", labels)
+        idx_jour = labels.index(choix)
+        date_obj = jours_dispo[idx_jour]
+        date_formatee = labels[idx_jour]
+        jour_col = idx_jour + 1  # colonne 0 = noms, colonne 1 = Lundi, etc.
+
+        df = charger_emprez(df_raw, jour_col, date_obj.strftime('%Y-%m-%d'))
+        if df.empty:
+            st.warning("Aucun quart trouvé pour cette journée.")
+            df = None
+        else:
+            st.success(f"{len(df)} employé(s) trouvé(s) pour le : {date_formatee}")
+
+# --- TÉLÉCHARGEMENT ---
+if df is not None and date_obj is not None:
+    processed_data = generer_horaire(df, date_obj, date_formatee)
     st.download_button(
         label="📥 Télécharger l'horaire Excel",
         data=processed_data,
