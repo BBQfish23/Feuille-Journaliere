@@ -1,3 +1,4 @@
+# Trigger the workflow now that it exists on the default branch
 name: Apply Emprez-only interface and print settings
 
 on:
